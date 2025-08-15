@@ -30,6 +30,11 @@
 #define ALIEN_STEP_DOWN 20
 #define ALIEN_COUNT (ALIEN_ROWS * ALIEN_COLS)
 
+#define ALIEN_BMP_W 10
+#define ALIEN_BMP_H 5
+#define SHIP_BMP_W 12
+#define SHIP_BMP_H 4
+
 typedef struct {
     char c;
     uint8_t rows[7];
@@ -136,6 +141,64 @@ void draw_text_block(SDL_Renderer *renderer, int x, int y, int scale, const char
         x += 6 * scale;
     }
 }
+
+void draw_bitmap(SDL_Renderer *renderer, int x, int y, int scale,
+                 const uint8_t *bitmap, int w, int h) {
+    for (int row = 0; row < h; ++row) {
+        for (int col = 0; col < w; ++col) {
+            if (bitmap[row * w + col]) {
+                SDL_Rect px = {x + col * scale, y + row * scale, scale, scale};
+                SDL_RenderFillRect(renderer, &px);
+            }
+        }
+    }
+}
+
+static const uint8_t alien_bitmaps[ALIEN_ROWS][2][ALIEN_BMP_W * ALIEN_BMP_H] = {
+    {
+        { 0,0,1,1,1,1,1,1,0,0,
+          0,1,1,0,0,0,0,1,1,0,
+          1,1,1,1,1,1,1,1,1,1,
+          1,0,1,1,1,1,1,1,0,1,
+          0,0,1,0,0,0,0,1,0,0 },
+        { 0,0,1,1,1,1,1,1,0,0,
+          1,1,1,0,0,0,0,1,1,1,
+          1,1,1,1,1,1,1,1,1,1,
+          0,1,0,1,1,1,1,0,1,0,
+          1,0,0,0,0,0,0,0,0,1 }
+    },
+    {
+        { 0,0,1,1,1,1,1,1,0,0,
+          0,1,0,0,1,1,0,0,1,0,
+          1,1,1,1,1,1,1,1,1,1,
+          0,1,1,0,0,0,0,1,1,0,
+          1,0,0,1,1,1,1,0,0,1 },
+        { 0,0,1,1,1,1,1,1,0,0,
+          1,0,0,0,1,1,0,0,0,1,
+          1,1,1,1,1,1,1,1,1,1,
+          0,1,0,0,0,0,0,0,1,0,
+          1,0,1,1,0,0,1,1,0,1 }
+    },
+    {
+        { 0,0,0,1,1,1,1,0,0,0,
+          0,0,1,1,1,1,1,1,0,0,
+          0,1,1,1,1,1,1,1,1,0,
+          1,1,0,1,1,1,1,0,1,1,
+          0,1,0,0,0,0,0,0,1,0 },
+        { 0,0,0,1,1,1,1,0,0,0,
+          0,1,1,1,1,1,1,1,1,0,
+          1,1,0,1,1,1,1,0,1,1,
+          0,1,1,0,0,0,0,1,1,0,
+          1,0,0,0,0,0,0,0,0,1 }
+    }
+};
+
+static const uint8_t ship_bitmap[SHIP_BMP_W * SHIP_BMP_H] = {
+    0,0,0,0,0,1,1,1,0,0,0,0,
+    0,0,1,1,1,1,1,1,1,1,0,0,
+    0,1,1,1,1,1,1,1,1,1,1,0,
+    1,1,1,1,1,1,1,1,1,1,1,1
+};
 
 typedef struct {
     Uint32 samples_left;
@@ -342,12 +405,18 @@ int main(void) {
         SDL_RenderClear(renderer);
 
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        int alien_frame = (SDL_GetTicks() / 500) % 2;
+        int alien_scale = ALIEN_WIDTH / ALIEN_BMP_W;
         for (int i = 0; i < ALIEN_COUNT; ++i) {
             if (alien_alive[i]) {
-                SDL_RenderFillRect(renderer, &aliens[i]);
+                int type = i / ALIEN_COLS;
+                draw_bitmap(renderer, aliens[i].x, aliens[i].y, alien_scale,
+                            alien_bitmaps[type][alien_frame], ALIEN_BMP_W, ALIEN_BMP_H);
             }
         }
-        SDL_RenderFillRect(renderer, &ship);
+        int ship_scale = SHIP_WIDTH / SHIP_BMP_W;
+        draw_bitmap(renderer, ship.x, ship.y, ship_scale, ship_bitmap,
+                    SHIP_BMP_W, SHIP_BMP_H);
         for (int i = 0; i < bullet_count; ++i) {
             SDL_RenderFillRect(renderer, &bullets[i]);
         }
