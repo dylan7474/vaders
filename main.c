@@ -36,6 +36,18 @@
 #define SHIP_BMP_W 12
 #define SHIP_BMP_H 4
 
+/* Config */
+static const SDL_Color COLOR_PLAYER        = {0, 255, 255, 255};
+static const SDL_Color COLOR_PLAYER_BULLET = {255, 255, 255, 255};
+static const SDL_Color COLOR_ALIEN         = {0, 255, 0, 255};
+static const SDL_Color COLOR_ALIEN_BULLET  = {255, 255, 0, 255};
+static const SDL_Color COLOR_HUD           = {255, 255, 255, 255};
+
+#define SHAKE_DURATION 10
+#define SHAKE_MAG 3
+#define PARTICLE_MAX 256
+#define PARTICLE_LIFETIME 300
+
 /* Game state */
 static SDL_Rect ship;
 static SDL_Rect player_bullets[MAX_BULLETS];
@@ -55,6 +67,19 @@ static int alien_fire_timer = 1500;
 static int invuln_timer = 0;
 static int wave_clear_timer = -1;
 static int active = 1;
+static int alien_flash[ALIEN_COUNT];
+static int shake_timer = 0;
+static int shake_x = 0, shake_y = 0;
+
+typedef struct {
+    float x, y;
+    float vx, vy;
+    int life;
+    int active;
+} Particle;
+
+static Particle particles[PARTICLE_MAX];
+static int muzzle_timer = 0;
 
 /* Audio */
 typedef enum { WAVE_SINE, WAVE_SQUARE, WAVE_NOISE } Waveform;
@@ -411,6 +436,10 @@ void init_wave(int wave_number) {
     alien_fire_interval = (int)(1500 / powf(1.1f, wave_number - 1));
     if (alien_fire_interval < 400) alien_fire_interval = 400;
     alien_fire_timer = alien_fire_interval;
+    for (int i = 0; i < ALIEN_COUNT; ++i) alien_flash[i] = 0;
+    for (int i = 0; i < PARTICLE_MAX; ++i) particles[i].active = 0;
+    muzzle_timer = 0;
+    shake_timer = 0;
 }
 
 void spawn_alien_bullet(SDL_Rect from) {
@@ -418,6 +447,48 @@ void spawn_alien_bullet(SDL_Rect from) {
     alien_bullets[alien_bullet_count++] =
         (SDL_Rect){from.x + from.w / 2 - BULLET_WIDTH / 2, from.y + from.h, BULLET_WIDTH, BULLET_HEIGHT};
     enqueue_sound(SND_ALIEN_SHOT);
+}
+
+void spawn_particles(int x, int y) {
+    int n = 12 + rand() % 9;
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < PARTICLE_MAX; ++j) {
+            if (!particles[j].active) {
+                float angle = (float)rand() / RAND_MAX * 2.0f * (float)M_PI;
+                float speed = 50.0f + rand() % 100; /* px per second */
+                particles[j].active = 1;
+                particles[j].life = PARTICLE_LIFETIME;
+                particles[j].x = (float)x;
+                particles[j].y = (float)y;
+                particles[j].vx = cosf(angle) * speed;
+                particles[j].vy = sinf(angle) * speed;
+                break;
+            }
+        }
+    }
+}
+
+void update_particles(int dt) {
+    for (int i = 0; i < PARTICLE_MAX; ++i) {
+        if (!particles[i].active) continue;
+        particles[i].life -= dt;
+        if (particles[i].life <= 0) {
+            particles[i].active = 0;
+            continue;
+        }
+        particles[i].x += particles[i].vx * dt / 1000.0f;
+        particles[i].y += particles[i].vy * dt / 1000.0f;
+    }
+}
+
+void draw_particles(SDL_Renderer *renderer) {
+    for (int i = 0; i < PARTICLE_MAX; ++i) {
+        if (!particles[i].active) continue;
+        Uint8 alpha = (Uint8)(255.0f * particles[i].life / PARTICLE_LIFETIME);
+        SDL_SetRenderDrawColor(renderer, COLOR_ALIEN.r, COLOR_ALIEN.g, COLOR_ALIEN.b, alpha);
+        SDL_Rect r = {(int)particles[i].x + shake_x, (int)particles[i].y + shake_y, 2, 2};
+        SDL_RenderFillRect(renderer, &r);
+    }
 }
 
 void check_collisions(void) {
@@ -428,7 +499,11 @@ void check_collisions(void) {
             if (alien_alive[a] && SDL_HasIntersection(&player_bullets[i], &aliens[a])) { hit = a; break; }
         }
         if (hit != -1) {
+            SDL_Rect a = aliens[hit];
             alien_alive[hit] = 0;
+            alien_flash[hit] = 50;
+            spawn_particles(a.x + a.w / 2, a.y + a.h / 2);
+            shake_timer = SHAKE_DURATION;
             score += 10;
             player_bullets[i] = player_bullets[--player_bullet_count];
             enqueue_sound(SND_ALIEN_HIT);
@@ -467,19 +542,20 @@ void check_collisions(void) {
 }
 
 void draw_hud(SDL_Renderer *renderer) {
-    int x = 10;
-    int y = 10;
+    SDL_SetRenderDrawColor(renderer, COLOR_HUD.r, COLOR_HUD.g, COLOR_HUD.b, COLOR_HUD.a);
     int scale = 2;
+    int y = 10 + shake_y;
+    int x = 10 + shake_x;
     draw_text_block(renderer, x, y, scale, "SCORE:");
     x += text_width_block("SCORE:", scale) + 2;
     draw_number(renderer, x, y, scale, score);
 
-    x = 250;
+    x = 250 + shake_x;
     draw_text_block(renderer, x, y, scale, "LIVES:");
     x += text_width_block("LIVES:", scale) + 2;
     draw_number(renderer, x, y, scale, lives);
 
-    x = 450;
+    x = 450 + shake_x;
     draw_text_block(renderer, x, y, scale, "WAVE:");
     x += text_width_block("WAVE:", scale) + 2;
     draw_number(renderer, x, y, scale, wave);
@@ -517,6 +593,7 @@ int main(void) {
         SDL_Quit();
         return 1;
     }
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
     SDL_AudioSpec want, have;
     SDL_zero(want);
@@ -556,6 +633,7 @@ int main(void) {
                         player_bullets[player_bullet_count++] =
                             (SDL_Rect){ship.x + SHIP_WIDTH / 2 - BULLET_WIDTH / 2,
                                        ship.y - BULLET_HEIGHT, BULLET_WIDTH, BULLET_HEIGHT};
+                        muzzle_timer = 50;
                         enqueue_sound(SND_PLAYER_SHOT);
                     }
                 } else if (key == SDLK_r && !active) {
@@ -640,40 +718,79 @@ int main(void) {
             }
         }
 
+        update_particles(dt);
+        if (muzzle_timer > 0) muzzle_timer -= dt;
+        if (shake_timer > 0) shake_timer -= dt;
+        for (int i = 0; i < ALIEN_COUNT; ++i) {
+            if (alien_flash[i] > 0) alien_flash[i] -= dt;
+        }
+        if (shake_timer > 0) {
+            shake_x = (rand() % (SHAKE_MAG * 2 + 1)) - SHAKE_MAG;
+            shake_y = (rand() % (SHAKE_MAG * 2 + 1)) - SHAKE_MAG;
+        } else {
+            shake_x = shake_y = 0;
+        }
+
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
         int alien_frame = (SDL_GetTicks() / 500) % 2;
         int alien_scale = ALIEN_WIDTH / ALIEN_BMP_W;
         for (int i = 0; i < ALIEN_COUNT; ++i) {
-            if (alien_alive[i]) {
+            if (alien_alive[i] || alien_flash[i] > 0) {
+                if (alien_flash[i] > 0) {
+                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+                } else {
+                    SDL_SetRenderDrawColor(renderer, COLOR_ALIEN.r, COLOR_ALIEN.g, COLOR_ALIEN.b, 255);
+                }
                 int type = i / ALIEN_COLS;
-                draw_bitmap(renderer, aliens[i].x, aliens[i].y, alien_scale,
+                draw_bitmap(renderer, aliens[i].x + shake_x, aliens[i].y + shake_y, alien_scale,
                             alien_bitmaps[type][alien_frame], ALIEN_BMP_W, ALIEN_BMP_H);
             }
         }
 
         if (invuln_timer <= 0 || (SDL_GetTicks() / 100) % 2 == 0) {
+            SDL_SetRenderDrawColor(renderer, COLOR_PLAYER.r, COLOR_PLAYER.g, COLOR_PLAYER.b, 255);
             int ship_scale = SHIP_WIDTH / SHIP_BMP_W;
-            draw_bitmap(renderer, ship.x, ship.y, ship_scale, ship_bitmap,
+            draw_bitmap(renderer, ship.x + shake_x, ship.y + shake_y, ship_scale, ship_bitmap,
                         SHIP_BMP_W, SHIP_BMP_H);
         }
 
+        if (muzzle_timer > 0) {
+            SDL_SetRenderDrawColor(renderer, COLOR_PLAYER_BULLET.r, COLOR_PLAYER_BULLET.g, COLOR_PLAYER_BULLET.b, 255);
+            int cx = ship.x + SHIP_WIDTH / 2 + shake_x;
+            int cy = ship.y + shake_y;
+            SDL_Rect r1 = {cx - 1, cy - 8, 2, 8};
+            SDL_Rect r2 = {cx - 4, cy - 4, 8, 2};
+            SDL_RenderFillRect(renderer, &r1);
+            SDL_RenderFillRect(renderer, &r2);
+        }
+
+        SDL_SetRenderDrawColor(renderer, COLOR_PLAYER_BULLET.r, COLOR_PLAYER_BULLET.g, COLOR_PLAYER_BULLET.b, 255);
         for (int i = 0; i < player_bullet_count; ++i) {
-            SDL_RenderFillRect(renderer, &player_bullets[i]);
+            SDL_Rect r = player_bullets[i];
+            r.x += shake_x;
+            r.y += shake_y;
+            SDL_RenderFillRect(renderer, &r);
         }
+        SDL_SetRenderDrawColor(renderer, COLOR_ALIEN_BULLET.r, COLOR_ALIEN_BULLET.g, COLOR_ALIEN_BULLET.b, 255);
         for (int i = 0; i < alien_bullet_count; ++i) {
-            SDL_RenderFillRect(renderer, &alien_bullets[i]);
+            SDL_Rect r = alien_bullets[i];
+            r.x += shake_x;
+            r.y += shake_y;
+            SDL_RenderFillRect(renderer, &r);
         }
+
+        draw_particles(renderer);
 
         draw_hud(renderer);
 
         if (!active) {
             const char *msg = "GAME OVER - Press R to restart";
             int w = text_width_block(msg, 2);
-            int x = (WIDTH - w) / 2;
-            int y = HEIGHT / 2 - (7 * 2) / 2;
+            int x = (WIDTH - w) / 2 + shake_x;
+            int y = HEIGHT / 2 - (7 * 2) / 2 + shake_y;
+            SDL_SetRenderDrawColor(renderer, COLOR_HUD.r, COLOR_HUD.g, COLOR_HUD.b, 255);
             draw_text_block(renderer, x, y, 2, msg);
         }
 
