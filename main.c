@@ -42,11 +42,33 @@ int main(void) {
     SDL_Rect bullets[MAX_BULLETS];
     int bullet_count = 0;
 
+    const int ALIEN_ROWS = 3;
+    const int ALIEN_COLS = 5;
+    const int ALIEN_WIDTH = 40;
+    const int ALIEN_HEIGHT = 20;
+    const int ALIEN_H_SPACING = 20;
+    const int ALIEN_V_SPACING = 20;
+    const int ALIEN_SPEED = 2;
+    const int ALIEN_STEP_DOWN = 20;
+    SDL_Rect aliens[ALIEN_ROWS * ALIEN_COLS];
+    int alien_alive[ALIEN_ROWS * ALIEN_COLS];
+    int alien_direction = 1;
+    for (int r = 0; r < ALIEN_ROWS; ++r) {
+        for (int c = 0; c < ALIEN_COLS; ++c) {
+            int idx = r * ALIEN_COLS + c;
+            aliens[idx] = (SDL_Rect){ 100 + c * (ALIEN_WIDTH + ALIEN_H_SPACING),
+                                      50 + r * (ALIEN_HEIGHT + ALIEN_V_SPACING),
+                                      ALIEN_WIDTH, ALIEN_HEIGHT };
+            alien_alive[idx] = 1;
+        }
+    }
+
     typedef struct {
         Uint32 samples_left;
         double phase;
         SDL_AudioDeviceID device;
         int freq;
+        double tone;
     } AudioData;
 
     void audio_callback(void *userdata, Uint8 *stream, int len) {
@@ -56,7 +78,7 @@ int main(void) {
         for (int i = 0; i < length; ++i) {
             if (data->samples_left > 0) {
                 buffer[i] = (Sint16)(sin(data->phase) * 3000);
-                data->phase += 2.0 * M_PI * 880.0 / data->freq;
+                data->phase += 2.0 * M_PI * data->tone / data->freq;
                 data->samples_left--;
             } else {
                 buffer[i] = 0;
@@ -84,6 +106,7 @@ int main(void) {
         audio.freq = have.freq;
     }
 
+    int game_over = 0;
     int running = 1;
     while (running) {
         Uint32 start = SDL_GetTicks();
@@ -102,6 +125,7 @@ int main(void) {
                             SDL_LockAudioDevice(audio.device);
                             audio.samples_left = (Uint32)(audio.freq * 0.15);
                             audio.phase = 0;
+                            audio.tone = 880.0;
                             SDL_UnlockAudioDevice(audio.device);
                             SDL_PauseAudioDevice(audio.device, 0);
                         }
@@ -120,8 +144,45 @@ int main(void) {
             if (ship.x > WIDTH - SHIP_WIDTH) ship.x = WIDTH - SHIP_WIDTH;
         }
 
+        int edge_hit = 0;
+        for (int i = 0; i < ALIEN_ROWS * ALIEN_COLS; ++i) {
+            if (!alien_alive[i]) continue;
+            aliens[i].x += alien_direction * ALIEN_SPEED;
+            if (aliens[i].x < 0 || aliens[i].x + aliens[i].w > WIDTH) {
+                edge_hit = 1;
+            }
+        }
+        if (edge_hit) {
+            for (int i = 0; i < ALIEN_ROWS * ALIEN_COLS; ++i) {
+                if (!alien_alive[i]) continue;
+                aliens[i].x -= alien_direction * ALIEN_SPEED;
+                aliens[i].y += ALIEN_STEP_DOWN;
+            }
+            alien_direction *= -1;
+        }
+
         for (int i = 0; i < bullet_count; ) {
             bullets[i].y -= BULLET_SPEED;
+            int hit = -1;
+            for (int a = 0; a < ALIEN_ROWS * ALIEN_COLS; ++a) {
+                if (alien_alive[a] && SDL_HasIntersection(&bullets[i], &aliens[a])) {
+                    hit = a;
+                    break;
+                }
+            }
+            if (hit != -1) {
+                alien_alive[hit] = 0;
+                bullets[i] = bullets[--bullet_count];
+                if (audio.device) {
+                    SDL_LockAudioDevice(audio.device);
+                    audio.samples_left = (Uint32)(audio.freq * 0.2);
+                    audio.phase = 0;
+                    audio.tone = 220.0;
+                    SDL_UnlockAudioDevice(audio.device);
+                    SDL_PauseAudioDevice(audio.device, 0);
+                }
+                continue;
+            }
             if (bullets[i].y + bullets[i].h < 0) {
                 bullets[i] = bullets[--bullet_count];
             } else {
@@ -129,10 +190,23 @@ int main(void) {
             }
         }
 
+        for (int i = 0; i < ALIEN_ROWS * ALIEN_COLS; ++i) {
+            if (alien_alive[i] && aliens[i].y + aliens[i].h >= ship.y) {
+                game_over = 1;
+                running = 0;
+                break;
+            }
+        }
+
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        for (int i = 0; i < ALIEN_ROWS * ALIEN_COLS; ++i) {
+            if (alien_alive[i]) {
+                SDL_RenderFillRect(renderer, &aliens[i]);
+            }
+        }
         SDL_RenderFillRect(renderer, &ship);
         for (int i = 0; i < bullet_count; ++i) {
             SDL_RenderFillRect(renderer, &bullets[i]);
@@ -144,6 +218,9 @@ int main(void) {
         if (frame_time < 16) {
             SDL_Delay(16 - frame_time);
         }
+    }
+    if (game_over) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Game Over", "Game Over", window);
     }
 
     if (audio.device) {
