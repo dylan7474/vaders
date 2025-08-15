@@ -541,6 +541,16 @@ void check_collisions(void) {
     }
 }
 
+int count_active_player_bullets(void) {
+    int count = 0;
+    for (int i = 0; i < player_bullet_count; ++i) {
+        if (player_bullets[i].y + player_bullets[i].h >= 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
 void draw_hud(SDL_Renderer *renderer) {
     SDL_SetRenderDrawColor(renderer, COLOR_HUD.r, COLOR_HUD.g, COLOR_HUD.b, COLOR_HUD.a);
     int scale = 2;
@@ -629,7 +639,7 @@ int main(void) {
                 if (key == SDLK_ESCAPE) {
                     running = 0;
                 } else if (key == SDLK_SPACE && active) {
-                    if (player_bullet_count < MAX_BULLETS) {
+                    if (count_active_player_bullets() < 3 && player_bullet_count < MAX_BULLETS) {
                         player_bullets[player_bullet_count++] =
                             (SDL_Rect){ship.x + SHIP_WIDTH / 2 - BULLET_WIDTH / 2,
                                        ship.y - BULLET_HEIGHT, BULLET_WIDTH, BULLET_HEIGHT};
