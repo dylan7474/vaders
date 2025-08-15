@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdlib.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -20,8 +21,8 @@
 #define BULLET_SPEED 10
 #define MAX_BULLETS 128
 
-#define ALIEN_ROWS 3
-#define ALIEN_COLS 5
+#define ALIEN_ROWS 5
+#define ALIEN_COLS 8
 #define ALIEN_WIDTH 40
 #define ALIEN_HEIGHT 20
 #define ALIEN_H_SPACING 20
@@ -34,6 +35,77 @@
 #define ALIEN_BMP_H 5
 #define SHIP_BMP_W 12
 #define SHIP_BMP_H 4
+
+/* Game state */
+static SDL_Rect ship;
+static SDL_Rect player_bullets[MAX_BULLETS];
+static SDL_Rect alien_bullets[MAX_BULLETS];
+static int player_bullet_count = 0;
+static int alien_bullet_count = 0;
+static SDL_Rect aliens[ALIEN_COUNT];
+static float alien_fx[ALIEN_COUNT];
+static int alien_alive[ALIEN_COUNT];
+static int alien_direction = 1;
+static int score = 0;
+static int lives = 3;
+static int wave = 1;
+static float alien_base_speed = ALIEN_SPEED;
+static int alien_fire_interval = 1500;
+static int alien_fire_timer = 1500;
+static int invuln_timer = 0;
+static int wave_clear_timer = -1;
+static int active = 1;
+
+/* Audio */
+typedef enum { WAVE_SINE, WAVE_SQUARE, WAVE_NOISE } Waveform;
+
+typedef struct {
+    double attack;   /* seconds */
+    double decay;    /* seconds */
+    double sustain;  /* seconds */
+    double release;  /* seconds */
+    double sustain_level;
+} ADSR;
+
+typedef struct {
+    int active;
+    double freq;
+    double phase;
+    double t;
+    double total;
+    Waveform wave;
+    ADSR env;
+} ActiveSound;
+
+#define MAX_ACTIVE_SOUNDS 32
+static ActiveSound sounds[MAX_ACTIVE_SOUNDS];
+
+typedef struct {
+    double freq;
+    int dur_ms;
+    Waveform wave;
+    ADSR env;
+    int delay_ms;
+} PendingSound;
+
+#define MAX_PENDING_SOUNDS 64
+static PendingSound pending_sounds[MAX_PENDING_SOUNDS];
+static int pending_count = 0;
+
+typedef struct {
+    SDL_AudioDeviceID device;
+    int freq;
+} AudioData;
+
+static AudioData audio = {0};
+
+typedef enum {
+    SND_PLAYER_SHOT,
+    SND_ALIEN_HIT,
+    SND_ALIEN_SHOT,
+    SND_WAVE_CLEAR,
+    SND_PLAYER_HIT
+} SoundEvent;
 
 typedef struct {
     char c;
@@ -200,49 +272,227 @@ static const uint8_t ship_bitmap[SHIP_BMP_W * SHIP_BMP_H] = {
     1,1,1,1,1,1,1,1,1,1,1,1
 };
 
-typedef struct {
-    Uint32 samples_left;
-    double phase;
-    SDL_AudioDeviceID device;
-    int freq;
-    double tone;
-} AudioData;
+/* -------------------- Audio -------------------- */
+
+static double envelope_amp(ActiveSound *s) {
+    double t = s->t;
+    double a = s->env.attack;
+    double d = s->env.decay;
+    double sus = s->env.sustain;
+    double r = s->env.release;
+    double level = s->env.sustain_level;
+    if (t < a) return t / a;
+    if (t < a + d) return 1.0 - (1.0 - level) * (t - a) / d;
+    if (t < a + d + sus) return level;
+    if (t < s->total) return level * (1.0 - (t - (a + d + sus)) / r);
+    s->active = 0;
+    return 0.0;
+}
 
 void audio_callback(void *userdata, Uint8 *stream, int len) {
-    AudioData *data = (AudioData *)userdata;
+    (void)userdata;
     Sint16 *buffer = (Sint16 *)stream;
     int length = len / 2;
     for (int i = 0; i < length; ++i) {
-        if (data->samples_left > 0) {
-            buffer[i] = (Sint16)(sin(data->phase) * 3000);
-            data->phase += 2.0 * M_PI * data->tone / data->freq;
-            data->samples_left--;
-        } else {
-            buffer[i] = 0;
+        double sample = 0.0;
+        for (int s = 0; s < MAX_ACTIVE_SOUNDS; ++s) {
+            if (!sounds[s].active) continue;
+            ActiveSound *as = &sounds[s];
+            double amp = envelope_amp(as);
+            double val = 0.0;
+            switch (as->wave) {
+                case WAVE_SINE:   val = sin(as->phase); break;
+                case WAVE_SQUARE: val = sin(as->phase) > 0 ? 1.0 : -1.0; break;
+                case WAVE_NOISE:  val = ((rand() % 20001) / 10000.0) - 1.0; break;
+            }
+            sample += val * amp;
+            as->phase += 2.0 * M_PI * as->freq / audio.freq;
+            as->t += 1.0 / audio.freq;
         }
-    }
-    if (data->samples_left == 0) {
-        SDL_PauseAudioDevice(data->device, 1);
+        if (sample > 1.0) sample = 1.0;
+        if (sample < -1.0) sample = -1.0;
+        buffer[i] = (Sint16)(sample * 3000);
     }
 }
 
-void reset_game(SDL_Rect *ship, int *bullet_count,
-                SDL_Rect *aliens, float *alien_fx, int *alien_alive,
-                int *alien_direction, int *score) {
-    *ship = (SDL_Rect){ (WIDTH - SHIP_WIDTH) / 2, HEIGHT - SHIP_HEIGHT - 10, SHIP_WIDTH, SHIP_HEIGHT };
-    *bullet_count = 0;
+void play_beep(double freq, int dur_ms, Waveform wave, ADSR env) {
+    SDL_LockAudioDevice(audio.device);
+    env.attack /= 1000.0;
+    env.decay  /= 1000.0;
+    env.release/= 1000.0;
+    if (env.attack < 0) env.attack = 0;
+    if (env.decay < 0) env.decay = 0;
+    if (env.release < 0) env.release = 0;
+    env.sustain = (dur_ms / 1000.0) - (env.attack + env.decay + env.release);
+    if (env.sustain < 0) env.sustain = 0;
+    double total = env.attack + env.decay + env.sustain + env.release;
+    for (int i = 0; i < MAX_ACTIVE_SOUNDS; ++i) {
+        if (!sounds[i].active) {
+            sounds[i].active = 1;
+            sounds[i].freq = freq;
+            sounds[i].phase = 0;
+            sounds[i].t = 0;
+            sounds[i].wave = wave;
+            sounds[i].env = env;
+            sounds[i].total = total;
+            break;
+        }
+    }
+    SDL_UnlockAudioDevice(audio.device);
+    SDL_PauseAudioDevice(audio.device, 0);
+}
+
+void schedule_beep(double freq, int dur_ms, Waveform wave, ADSR env, int delay_ms) {
+    if (pending_count >= MAX_PENDING_SOUNDS) return;
+    pending_sounds[pending_count++] = (PendingSound){freq, dur_ms, wave, env, delay_ms};
+}
+
+void update_sounds(int dt_ms) {
+    for (int i = 0; i < pending_count; ) {
+        pending_sounds[i].delay_ms -= dt_ms;
+        if (pending_sounds[i].delay_ms <= 0) {
+            play_beep(pending_sounds[i].freq, pending_sounds[i].dur_ms,
+                     pending_sounds[i].wave, pending_sounds[i].env);
+            pending_sounds[i] = pending_sounds[--pending_count];
+        } else {
+            ++i;
+        }
+    }
+}
+
+void enqueue_sound(SoundEvent e) {
+    ADSR env;
+    switch (e) {
+        case SND_PLAYER_SHOT:
+            env = (ADSR){10, 40, 0, 40, 0.6};
+            play_beep(880.0, 120, WAVE_SINE, env);
+            break;
+        case SND_ALIEN_HIT:
+            env = (ADSR){10, 150, 0, 150, 0.5};
+            play_beep(220.0, 300, WAVE_SQUARE, env);
+            env = (ADSR){5, 60, 0, 60, 0.5};
+            play_beep(0.0, 120, WAVE_NOISE, env);
+            break;
+        case SND_ALIEN_SHOT:
+            env = (ADSR){5, 30, 0, 30, 0.6};
+            play_beep(660.0, 80, WAVE_SINE, env);
+            break;
+        case SND_PLAYER_HIT:
+            env = (ADSR){10, 100, 0, 100, 0.6};
+            play_beep(180.0, 250, WAVE_SINE, env);
+            break;
+        case SND_WAVE_CLEAR:
+            env = (ADSR){5, 50, 0, 50, 0.6};
+            schedule_beep(440.0, 120, WAVE_SINE, env, 0);
+            schedule_beep(660.0, 120, WAVE_SINE, env, 150);
+            schedule_beep(880.0, 120, WAVE_SINE, env, 300);
+            break;
+    }
+}
+
+/* -------------------- Game Helpers -------------------- */
+
+void init_wave(int wave_number) {
+    player_bullet_count = 0;
+    alien_bullet_count = 0;
     for (int r = 0; r < ALIEN_ROWS; ++r) {
         for (int c = 0; c < ALIEN_COLS; ++c) {
             int idx = r * ALIEN_COLS + c;
             float ax = 100 + c * (ALIEN_WIDTH + ALIEN_H_SPACING);
             float ay = 50 + r * (ALIEN_HEIGHT + ALIEN_V_SPACING);
             alien_fx[idx] = ax;
-            aliens[idx] = (SDL_Rect){ (int)ax, (int)ay, ALIEN_WIDTH, ALIEN_HEIGHT };
+            aliens[idx] = (SDL_Rect){(int)ax, (int)ay, ALIEN_WIDTH, ALIEN_HEIGHT};
             alien_alive[idx] = 1;
         }
     }
-    *alien_direction = 1;
-    *score = 0;
+    alien_direction = 1;
+    alien_base_speed = ALIEN_SPEED * powf(1.1f, wave_number - 1);
+    if (alien_base_speed > 8.0f) alien_base_speed = 8.0f;
+    alien_fire_interval = (int)(1500 / powf(1.1f, wave_number - 1));
+    if (alien_fire_interval < 400) alien_fire_interval = 400;
+    alien_fire_timer = alien_fire_interval;
+}
+
+void spawn_alien_bullet(SDL_Rect from) {
+    if (alien_bullet_count >= MAX_BULLETS) return;
+    alien_bullets[alien_bullet_count++] =
+        (SDL_Rect){from.x + from.w / 2 - BULLET_WIDTH / 2, from.y + from.h, BULLET_WIDTH, BULLET_HEIGHT};
+    enqueue_sound(SND_ALIEN_SHOT);
+}
+
+void check_collisions(void) {
+    for (int i = 0; i < player_bullet_count;) {
+        player_bullets[i].y -= BULLET_SPEED;
+        int hit = -1;
+        for (int a = 0; a < ALIEN_COUNT; ++a) {
+            if (alien_alive[a] && SDL_HasIntersection(&player_bullets[i], &aliens[a])) { hit = a; break; }
+        }
+        if (hit != -1) {
+            alien_alive[hit] = 0;
+            score += 10;
+            player_bullets[i] = player_bullets[--player_bullet_count];
+            enqueue_sound(SND_ALIEN_HIT);
+            continue;
+        }
+        if (player_bullets[i].y + player_bullets[i].h < 0) {
+            player_bullets[i] = player_bullets[--player_bullet_count];
+        } else {
+            ++i;
+        }
+    }
+
+    for (int i = 0; i < alien_bullet_count;) {
+        alien_bullets[i].y += BULLET_SPEED;
+        if (alien_bullets[i].y > HEIGHT) {
+            alien_bullets[i] = alien_bullets[--alien_bullet_count];
+            continue;
+        }
+        if (invuln_timer <= 0 && SDL_HasIntersection(&alien_bullets[i], &ship)) {
+            alien_bullets[i] = alien_bullets[--alien_bullet_count];
+            lives--;
+            invuln_timer = 1000;
+            enqueue_sound(SND_PLAYER_HIT);
+            if (lives <= 0) active = 0;
+            continue;
+        }
+        ++i;
+    }
+
+    for (int i = 0; i < ALIEN_COUNT; ++i) {
+        if (alien_alive[i] && aliens[i].y + aliens[i].h >= ship.y) {
+            active = 0;
+            break;
+        }
+    }
+}
+
+void draw_hud(SDL_Renderer *renderer) {
+    int x = 10;
+    int y = 10;
+    int scale = 2;
+    draw_text_block(renderer, x, y, scale, "SCORE:");
+    x += text_width_block("SCORE:", scale) + 2;
+    draw_number(renderer, x, y, scale, score);
+
+    x = 250;
+    draw_text_block(renderer, x, y, scale, "LIVES:");
+    x += text_width_block("LIVES:", scale) + 2;
+    draw_number(renderer, x, y, scale, lives);
+
+    x = 450;
+    draw_text_block(renderer, x, y, scale, "WAVE:");
+    x += text_width_block("WAVE:", scale) + 2;
+    draw_number(renderer, x, y, scale, wave);
+}
+
+void reset_game(void) {
+    ship = (SDL_Rect){(WIDTH - SHIP_WIDTH) / 2, HEIGHT - SHIP_HEIGHT - 10, SHIP_WIDTH, SHIP_HEIGHT};
+    score = 0;
+    lives = 3;
+    wave = 1;
+    invuln_timer = 0;
+    active = 1;
+    init_wave(1);
 }
 
 int main(void) {
@@ -268,19 +518,6 @@ int main(void) {
         return 1;
     }
 
-    SDL_Rect ship;
-    SDL_Rect bullets[MAX_BULLETS];
-    int bullet_count;
-    SDL_Rect aliens[ALIEN_COUNT];
-    float alien_fx[ALIEN_COUNT];
-    int alien_alive[ALIEN_COUNT];
-    int alien_direction;
-    int score;
-
-    reset_game(&ship, &bullet_count, aliens, alien_fx, alien_alive, &alien_direction, &score);
-    const int initial_alien_count = ALIEN_COUNT;
-
-    AudioData audio = {0};
     SDL_AudioSpec want, have;
     SDL_zero(want);
     want.freq = 44100;
@@ -288,7 +525,6 @@ int main(void) {
     want.channels = 1;
     want.samples = 2048;
     want.callback = audio_callback;
-    want.userdata = &audio;
 
     audio.device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
     if (audio.device == 0) {
@@ -297,10 +533,16 @@ int main(void) {
         audio.freq = have.freq;
     }
 
+    srand((unsigned int)SDL_GetTicks());
+    reset_game();
+
     int running = 1;
-    int active = 1; /* game playing state */
+    Uint32 last = SDL_GetTicks();
     while (running) {
-        Uint32 start = SDL_GetTicks();
+        Uint32 now = SDL_GetTicks();
+        int dt = (int)(now - last);
+        last = now;
+
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
@@ -310,24 +552,19 @@ int main(void) {
                 if (key == SDLK_ESCAPE) {
                     running = 0;
                 } else if (key == SDLK_SPACE && active) {
-                    if (bullet_count < MAX_BULLETS) {
-                        bullets[bullet_count++] = (SDL_Rect){ ship.x + SHIP_WIDTH / 2 - BULLET_WIDTH / 2,
-                                                                ship.y - BULLET_HEIGHT, BULLET_WIDTH, BULLET_HEIGHT };
-                        if (audio.device) {
-                            SDL_LockAudioDevice(audio.device);
-                            audio.samples_left = (Uint32)(audio.freq * 0.15);
-                            audio.phase = 0;
-                            audio.tone = 880.0;
-                            SDL_UnlockAudioDevice(audio.device);
-                            SDL_PauseAudioDevice(audio.device, 0);
-                        }
+                    if (player_bullet_count < MAX_BULLETS) {
+                        player_bullets[player_bullet_count++] =
+                            (SDL_Rect){ship.x + SHIP_WIDTH / 2 - BULLET_WIDTH / 2,
+                                       ship.y - BULLET_HEIGHT, BULLET_WIDTH, BULLET_HEIGHT};
+                        enqueue_sound(SND_PLAYER_SHOT);
                     }
-                } else if (key == SDLK_r) {
-                    reset_game(&ship, &bullet_count, aliens, alien_fx, alien_alive, &alien_direction, &score);
-                    active = 1;
+                } else if (key == SDLK_r && !active) {
+                    reset_game();
                 }
             }
         }
+
+        update_sounds(dt);
 
         const Uint8 *state = SDL_GetKeyboardState(NULL);
         if (active) {
@@ -344,8 +581,8 @@ int main(void) {
             for (int i = 0; i < ALIEN_COUNT; ++i) {
                 if (alien_alive[i]) alive_count++;
             }
-            float speed_multiplier = 1.0f + (initial_alien_count - alive_count) * 0.02f;
-            float move = ALIEN_SPEED * speed_multiplier;
+            float speed_multiplier = 1.0f + (ALIEN_COUNT - alive_count) * 0.02f;
+            float move = alien_base_speed * speed_multiplier;
 
             int edge_hit = 0;
             for (int i = 0; i < ALIEN_COUNT; ++i) {
@@ -366,37 +603,39 @@ int main(void) {
                 alien_direction *= -1;
             }
 
-            for (int i = 0; i < bullet_count; ) {
-                bullets[i].y -= BULLET_SPEED;
-                int hit = -1;
-                for (int a = 0; a < ALIEN_COUNT; ++a) {
-                    if (alien_alive[a] && SDL_HasIntersection(&bullets[i], &aliens[a])) { hit = a; break; }
-                }
-                if (hit != -1) {
-                    alien_alive[hit] = 0;
-                    score += 10;
-                    bullets[i] = bullets[--bullet_count];
-                    if (audio.device) {
-                        SDL_LockAudioDevice(audio.device);
-                        audio.samples_left = (Uint32)(audio.freq * 0.2);
-                        audio.phase = 0;
-                        audio.tone = 220.0;
-                        SDL_UnlockAudioDevice(audio.device);
-                        SDL_PauseAudioDevice(audio.device, 0);
+            alien_fire_timer -= dt;
+            if (alien_fire_timer <= 0) {
+                int cols[ALIEN_COLS];
+                int colcount = 0;
+                for (int c = 0; c < ALIEN_COLS; ++c) {
+                    for (int r = ALIEN_ROWS - 1; r >= 0; --r) {
+                        int idx = r * ALIEN_COLS + c;
+                        if (alien_alive[idx]) { cols[colcount++] = c; break; }
                     }
-                    continue;
                 }
-                if (bullets[i].y + bullets[i].h < 0) {
-                    bullets[i] = bullets[--bullet_count];
-                } else {
-                    ++i;
+                if (colcount > 0) {
+                    int col = cols[rand() % colcount];
+                    for (int r = ALIEN_ROWS - 1; r >= 0; --r) {
+                        int idx = r * ALIEN_COLS + col;
+                        if (alien_alive[idx]) { spawn_alien_bullet(aliens[idx]); break; }
+                    }
                 }
+                alien_fire_timer = alien_fire_interval;
             }
 
-            for (int i = 0; i < ALIEN_COUNT; ++i) {
-                if (alien_alive[i] && aliens[i].y + aliens[i].h >= ship.y) {
-                    active = 0;
-                    break;
+            check_collisions();
+
+            if (invuln_timer > 0) invuln_timer -= dt;
+
+            if (alive_count == 0 && wave_clear_timer < 0) {
+                wave_clear_timer = 1500;
+                enqueue_sound(SND_WAVE_CLEAR);
+            }
+            if (wave_clear_timer >= 0) {
+                wave_clear_timer -= dt;
+                if (wave_clear_timer <= 0) {
+                    wave++;
+                    init_wave(wave);
                 }
             }
         }
@@ -414,36 +653,37 @@ int main(void) {
                             alien_bitmaps[type][alien_frame], ALIEN_BMP_W, ALIEN_BMP_H);
             }
         }
-        int ship_scale = SHIP_WIDTH / SHIP_BMP_W;
-        draw_bitmap(renderer, ship.x, ship.y, ship_scale, ship_bitmap,
-                    SHIP_BMP_W, SHIP_BMP_H);
-        for (int i = 0; i < bullet_count; ++i) {
-            SDL_RenderFillRect(renderer, &bullets[i]);
+
+        if (invuln_timer <= 0 || (SDL_GetTicks() / 100) % 2 == 0) {
+            int ship_scale = SHIP_WIDTH / SHIP_BMP_W;
+            draw_bitmap(renderer, ship.x, ship.y, ship_scale, ship_bitmap,
+                        SHIP_BMP_W, SHIP_BMP_H);
         }
 
-        draw_text_block(renderer, 10, 10, 2, "SCORE:");
-        int score_x = 10 + text_width_block("SCORE:", 2) + 2;
-        draw_number(renderer, score_x, 10, 2, score);
+        for (int i = 0; i < player_bullet_count; ++i) {
+            SDL_RenderFillRect(renderer, &player_bullets[i]);
+        }
+        for (int i = 0; i < alien_bullet_count; ++i) {
+            SDL_RenderFillRect(renderer, &alien_bullets[i]);
+        }
+
+        draw_hud(renderer);
 
         if (!active) {
             const char *msg = "GAME OVER - Press R to restart";
             int w = text_width_block(msg, 2);
             int x = (WIDTH - w) / 2;
-            int y = HEIGHT / 2 - (7*2)/2;
+            int y = HEIGHT / 2 - (7 * 2) / 2;
             draw_text_block(renderer, x, y, 2, msg);
         }
 
         SDL_RenderPresent(renderer);
 
-        Uint32 frame_time = SDL_GetTicks() - start;
-        if (frame_time < 16) {
-            SDL_Delay(16 - frame_time);
-        }
+        Uint32 frame_time = SDL_GetTicks() - now;
+        if (frame_time < 16) SDL_Delay(16 - frame_time);
     }
 
-    if (audio.device) {
-        SDL_CloseAudioDevice(audio.device);
-    }
+    if (audio.device) SDL_CloseAudioDevice(audio.device);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
