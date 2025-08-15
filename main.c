@@ -21,7 +21,7 @@
 #define BULLET_SPEED 10
 #define MAX_BULLETS 128
 
-#define ALIEN_ROWS 5
+#define ALIEN_ROWS 3
 #define ALIEN_COLS 8
 #define ALIEN_WIDTH 40
 #define ALIEN_HEIGHT 20
