@@ -25,11 +25,11 @@
 
 #define ALIEN_ROWS 3
 #define ALIEN_COLS 8
-#define ALIEN_WIDTH 80
+#define ALIEN_WIDTH 60
 #define ALIEN_HEIGHT 40
 #define ALIEN_H_SPACING 20
 #define ALIEN_V_SPACING 20
-#define ALIEN_SPEED 2
+#define ALIEN_SPEED 1
 #define ALIEN_STEP_DOWN 40
 #define ALIEN_COUNT (ALIEN_ROWS * ALIEN_COLS)
 
@@ -416,9 +416,17 @@ int main(void) {
     if (!(IMG_Init(IMG_INIT_JPG) & IMG_INIT_JPG)) {
         SDL_Log("Failed to initialize SDL_image: %s", IMG_GetError());
     }
-    tex_ship = IMG_LoadTexture(renderer, "Icon-SpaceShip.jpeg");
-    if (!tex_ship) {
-        SDL_Log("Failed to load ship texture: %s", IMG_GetError());
+    SDL_Surface *ship_surf = IMG_Load("Icon-SpaceShip.jpeg");
+    if (!ship_surf) {
+        SDL_Log("Failed to load ship image: %s", IMG_GetError());
+    } else {
+        SDL_SetColorKey(ship_surf, SDL_TRUE, SDL_MapRGB(ship_surf->format, 255, 255, 255));
+        tex_ship = SDL_CreateTextureFromSurface(renderer, ship_surf);
+        SDL_SetTextureBlendMode(tex_ship, SDL_BLENDMODE_BLEND);
+        SDL_FreeSurface(ship_surf);
+        if (!tex_ship) {
+            SDL_Log("Failed to create ship texture: %s", SDL_GetError());
+        }
     }
     tex_aliens[0] = IMG_LoadTexture(renderer, "Icon-Alien1.jpeg");
     tex_aliens[1] = IMG_LoadTexture(renderer, "Icon-Alien2.jpeg");
@@ -432,16 +440,16 @@ int main(void) {
     if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
         SDL_Log("Failed to open audio: %s", Mix_GetError());
     }
-    snd_player_shot = Mix_LoadWAV("player_shot.wav");
-    if (!snd_player_shot) SDL_Log("Failed to load player_shot.wav: %s", Mix_GetError());
-    snd_alien_hit = Mix_LoadWAV("alien_hit.wav");
-    if (!snd_alien_hit) SDL_Log("Failed to load alien_hit.wav: %s", Mix_GetError());
-    snd_alien_shot = Mix_LoadWAV("alien_shot.wav");
-    if (!snd_alien_shot) SDL_Log("Failed to load alien_shot.wav: %s", Mix_GetError());
-    snd_wave_clear = Mix_LoadWAV("wave_clear.wav");
-    if (!snd_wave_clear) SDL_Log("Failed to load wave_clear.wav: %s", Mix_GetError());
-    snd_player_hit = Mix_LoadWAV("player_hit.wav");
-    if (!snd_player_hit) SDL_Log("Failed to load player_hit.wav: %s", Mix_GetError());
+    snd_player_shot = Mix_LoadWAV("laser.wav");
+    if (!snd_player_shot) SDL_Log("Failed to load laser.wav: %s", Mix_GetError());
+    snd_alien_hit = Mix_LoadWAV("explosion.wav");
+    if (!snd_alien_hit) SDL_Log("Failed to load explosion.wav: %s", Mix_GetError());
+    snd_alien_shot = Mix_LoadWAV("blip.wav");
+    if (!snd_alien_shot) SDL_Log("Failed to load blip.wav: %s", Mix_GetError());
+    snd_wave_clear = Mix_LoadWAV("blip.wav");
+    if (!snd_wave_clear) SDL_Log("Failed to load blip.wav: %s", Mix_GetError());
+    snd_player_hit = Mix_LoadWAV("death.wav");
+    if (!snd_player_hit) SDL_Log("Failed to load death.wav: %s", Mix_GetError());
 
     srand((unsigned int)SDL_GetTicks());
     reset_game();
