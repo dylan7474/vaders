@@ -15,6 +15,8 @@
 #define WIDTH 800
 #define HEIGHT 600
 #define SHIP_SPEED 5
+#define SHIP_WIDTH 120
+#define SHIP_HEIGHT 40
 
 #define BULLET_WIDTH 4
 #define BULLET_HEIGHT 10
@@ -410,9 +412,8 @@ void draw_hud(SDL_Renderer *renderer) {
 }
 
 void reset_game(void) {
-    int w, h;
-    SDL_QueryTexture(tex_ship, NULL, NULL, &w, &h);
-    ship = (SDL_Rect){(WIDTH - w) / 2, HEIGHT - h - 10, w, h};
+    ship = (SDL_Rect){(WIDTH - SHIP_WIDTH) / 2, HEIGHT - SHIP_HEIGHT - 10,
+                      SHIP_WIDTH, SHIP_HEIGHT};
     score = 0;
     lives = 3;
     wave = 1;
