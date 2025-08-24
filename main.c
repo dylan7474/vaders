@@ -434,18 +434,18 @@ int count_active_player_bullets(void) {
 void draw_hud(SDL_Renderer *renderer) {
     SDL_SetRenderDrawColor(renderer, COLOR_HUD.r, COLOR_HUD.g, COLOR_HUD.b, COLOR_HUD.a);
     int scale = 2;
-    int y = 10 + shake_y;
-    int x = 10 + shake_x;
+    int y = 10;
+    int x = 10;
     draw_text_block(renderer, x, y, scale, "SCORE:");
     x += text_width_block("SCORE:", scale) + 2;
     draw_number(renderer, x, y, scale, score);
 
-    x = 250 + shake_x;
+    x = 250;
     draw_text_block(renderer, x, y, scale, "LIVES:");
     x += text_width_block("LIVES:", scale) + 2;
     draw_number(renderer, x, y, scale, lives);
 
-    x = 450 + shake_x;
+    x = 450;
     draw_text_block(renderer, x, y, scale, "WAVE:");
     x += text_width_block("WAVE:", scale) + 2;
     draw_number(renderer, x, y, scale, wave);
