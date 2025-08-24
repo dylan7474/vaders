@@ -218,7 +218,8 @@ static SDL_Texture *load_texture(SDL_Renderer *renderer, const char *path) {
     }
     Uint32 *pixels = (Uint32 *)surf->pixels;
     int count = surf->w * surf->h;
-    Uint32 transparent = SDL_MapRGBA(surf->format, 255, 255, 255, 0);
+    /* Use a fully transparent black pixel so linear filtering won't bleed white */
+    Uint32 transparent = SDL_MapRGBA(surf->format, 0, 0, 0, 0);
     for (int i = 0; i < count; ++i) {
         Uint8 r, g, b;
         SDL_GetRGB(pixels[i], surf->format, &r, &g, &b);
