@@ -1,4 +1,5 @@
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,13 +32,8 @@
 #define ALIEN_STEP_DOWN 20
 #define ALIEN_COUNT (ALIEN_ROWS * ALIEN_COLS)
 
-#define ALIEN_BMP_W 10
-#define ALIEN_BMP_H 5
-#define SHIP_BMP_W 12
-#define SHIP_BMP_H 4
 
 /* Config */
-static const SDL_Color COLOR_PLAYER        = {0, 255, 255, 255};
 static const SDL_Color COLOR_PLAYER_BULLET = {255, 255, 255, 255};
 static const SDL_Color COLOR_ALIEN         = {0, 255, 0, 255};
 static const SDL_Color COLOR_ALIEN_BULLET  = {255, 255, 0, 255};
@@ -70,6 +66,10 @@ static int active = 1;
 static int alien_flash[ALIEN_COUNT];
 static int shake_timer = 0;
 static int shake_x = 0, shake_y = 0;
+
+/* Textures */
+static SDL_Texture *tex_ship;
+static SDL_Texture *tex_aliens[ALIEN_ROWS];
 
 typedef struct {
     float x, y;
@@ -239,63 +239,6 @@ void draw_text_block(SDL_Renderer *renderer, int x, int y, int scale, const char
     }
 }
 
-void draw_bitmap(SDL_Renderer *renderer, int x, int y, int scale,
-                 const uint8_t *bitmap, int w, int h) {
-    for (int row = 0; row < h; ++row) {
-        for (int col = 0; col < w; ++col) {
-            if (bitmap[row * w + col]) {
-                SDL_Rect px = {x + col * scale, y + row * scale, scale, scale};
-                SDL_RenderFillRect(renderer, &px);
-            }
-        }
-    }
-}
-
-static const uint8_t alien_bitmaps[ALIEN_ROWS][2][ALIEN_BMP_W * ALIEN_BMP_H] = {
-    {
-        { 0,0,1,1,1,1,1,1,0,0,
-          0,1,1,0,0,0,0,1,1,0,
-          1,1,1,1,1,1,1,1,1,1,
-          1,0,1,1,1,1,1,1,0,1,
-          0,0,1,0,0,0,0,1,0,0 },
-        { 0,0,1,1,1,1,1,1,0,0,
-          1,1,1,0,0,0,0,1,1,1,
-          1,1,1,1,1,1,1,1,1,1,
-          0,1,0,1,1,1,1,0,1,0,
-          1,0,0,0,0,0,0,0,0,1 }
-    },
-    {
-        { 0,0,1,1,1,1,1,1,0,0,
-          0,1,0,0,1,1,0,0,1,0,
-          1,1,1,1,1,1,1,1,1,1,
-          0,1,1,0,0,0,0,1,1,0,
-          1,0,0,1,1,1,1,0,0,1 },
-        { 0,0,1,1,1,1,1,1,0,0,
-          1,0,0,0,1,1,0,0,0,1,
-          1,1,1,1,1,1,1,1,1,1,
-          0,1,0,0,0,0,0,0,1,0,
-          1,0,1,1,0,0,1,1,0,1 }
-    },
-    {
-        { 0,0,0,1,1,1,1,0,0,0,
-          0,0,1,1,1,1,1,1,0,0,
-          0,1,1,1,1,1,1,1,1,0,
-          1,1,0,1,1,1,1,0,1,1,
-          0,1,0,0,0,0,0,0,1,0 },
-        { 0,0,0,1,1,1,1,0,0,0,
-          0,1,1,1,1,1,1,1,1,0,
-          1,1,0,1,1,1,1,0,1,1,
-          0,1,1,0,0,0,0,1,1,0,
-          1,0,0,0,0,0,0,0,0,1 }
-    }
-};
-
-static const uint8_t ship_bitmap[SHIP_BMP_W * SHIP_BMP_H] = {
-    0,0,0,0,0,1,1,1,0,0,0,0,
-    0,0,1,1,1,1,1,1,1,1,0,0,
-    0,1,1,1,1,1,1,1,1,1,1,0,
-    1,1,1,1,1,1,1,1,1,1,1,1
-};
 
 /* -------------------- Audio -------------------- */
 
@@ -605,6 +548,22 @@ int main(void) {
     }
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
+    if (!(IMG_Init(IMG_INIT_JPG) & IMG_INIT_JPG)) {
+        SDL_Log("Failed to initialize SDL_image: %s", IMG_GetError());
+    }
+    tex_ship = IMG_LoadTexture(renderer, "icon-SpaceShip.jpeg");
+    if (!tex_ship) {
+        SDL_Log("Failed to load ship texture: %s", IMG_GetError());
+    }
+    tex_aliens[0] = IMG_LoadTexture(renderer, "Icon-alien1.jpeg");
+    tex_aliens[1] = IMG_LoadTexture(renderer, "Icon-Alien2.jpeg");
+    tex_aliens[2] = IMG_LoadTexture(renderer, "Icon-Alien3.jpeg");
+    for (int i = 0; i < ALIEN_ROWS; ++i) {
+        if (!tex_aliens[i]) {
+            SDL_Log("Failed to load alien texture %d: %s", i, IMG_GetError());
+        }
+    }
+
     SDL_AudioSpec want, have;
     SDL_zero(want);
     want.freq = 44100;
@@ -744,26 +703,17 @@ int main(void) {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
-        int alien_frame = (SDL_GetTicks() / 500) % 2;
-        int alien_scale = ALIEN_WIDTH / ALIEN_BMP_W;
         for (int i = 0; i < ALIEN_COUNT; ++i) {
             if (alien_alive[i] || alien_flash[i] > 0) {
-                if (alien_flash[i] > 0) {
-                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-                } else {
-                    SDL_SetRenderDrawColor(renderer, COLOR_ALIEN.r, COLOR_ALIEN.g, COLOR_ALIEN.b, 255);
-                }
                 int type = i / ALIEN_COLS;
-                draw_bitmap(renderer, aliens[i].x + shake_x, aliens[i].y + shake_y, alien_scale,
-                            alien_bitmaps[type][alien_frame], ALIEN_BMP_W, ALIEN_BMP_H);
+                SDL_Rect dst = {aliens[i].x + shake_x, aliens[i].y + shake_y, ALIEN_WIDTH, ALIEN_HEIGHT};
+                SDL_RenderCopy(renderer, tex_aliens[type], NULL, &dst);
             }
         }
 
         if (invuln_timer <= 0 || (SDL_GetTicks() / 100) % 2 == 0) {
-            SDL_SetRenderDrawColor(renderer, COLOR_PLAYER.r, COLOR_PLAYER.g, COLOR_PLAYER.b, 255);
-            int ship_scale = SHIP_WIDTH / SHIP_BMP_W;
-            draw_bitmap(renderer, ship.x + shake_x, ship.y + shake_y, ship_scale, ship_bitmap,
-                        SHIP_BMP_W, SHIP_BMP_H);
+            SDL_Rect dst = {ship.x + shake_x, ship.y + shake_y, SHIP_WIDTH, SHIP_HEIGHT};
+            SDL_RenderCopy(renderer, tex_ship, NULL, &dst);
         }
 
         if (muzzle_timer > 0) {
@@ -811,8 +761,11 @@ int main(void) {
     }
 
     if (audio.device) SDL_CloseAudioDevice(audio.device);
+    SDL_DestroyTexture(tex_ship);
+    for (int i = 0; i < ALIEN_ROWS; ++i) SDL_DestroyTexture(tex_aliens[i]);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+    IMG_Quit();
     SDL_Quit();
     return 0;
 }
