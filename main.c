@@ -1,4 +1,6 @@
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
+#include <SDL2/SDL_mixer.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,13 +33,8 @@
 #define ALIEN_STEP_DOWN 20
 #define ALIEN_COUNT (ALIEN_ROWS * ALIEN_COLS)
 
-#define ALIEN_BMP_W 10
-#define ALIEN_BMP_H 5
-#define SHIP_BMP_W 12
-#define SHIP_BMP_H 4
 
 /* Config */
-static const SDL_Color COLOR_PLAYER        = {0, 255, 255, 255};
 static const SDL_Color COLOR_PLAYER_BULLET = {255, 255, 255, 255};
 static const SDL_Color COLOR_ALIEN         = {0, 255, 0, 255};
 static const SDL_Color COLOR_ALIEN_BULLET  = {255, 255, 0, 255};
@@ -71,6 +68,10 @@ static int alien_flash[ALIEN_COUNT];
 static int shake_timer = 0;
 static int shake_x = 0, shake_y = 0;
 
+/* Textures */
+static SDL_Texture *tex_ship;
+static SDL_Texture *tex_aliens[ALIEN_ROWS];
+
 typedef struct {
     float x, y;
     float vx, vy;
@@ -82,47 +83,11 @@ static Particle particles[PARTICLE_MAX];
 static int muzzle_timer = 0;
 
 /* Audio */
-typedef enum { WAVE_SINE, WAVE_SQUARE, WAVE_NOISE } Waveform;
-
-typedef struct {
-    double attack;   /* seconds */
-    double decay;    /* seconds */
-    double sustain;  /* seconds */
-    double release;  /* seconds */
-    double sustain_level;
-} ADSR;
-
-typedef struct {
-    int active;
-    double freq;
-    double phase;
-    double t;
-    double total;
-    Waveform wave;
-    ADSR env;
-} ActiveSound;
-
-#define MAX_ACTIVE_SOUNDS 32
-static ActiveSound sounds[MAX_ACTIVE_SOUNDS];
-
-typedef struct {
-    double freq;
-    int dur_ms;
-    Waveform wave;
-    ADSR env;
-    int delay_ms;
-} PendingSound;
-
-#define MAX_PENDING_SOUNDS 64
-static PendingSound pending_sounds[MAX_PENDING_SOUNDS];
-static int pending_count = 0;
-
-typedef struct {
-    SDL_AudioDeviceID device;
-    int freq;
-} AudioData;
-
-static AudioData audio = {0};
+static Mix_Chunk *snd_player_shot;
+static Mix_Chunk *snd_alien_hit;
+static Mix_Chunk *snd_alien_shot;
+static Mix_Chunk *snd_wave_clear;
+static Mix_Chunk *snd_player_hit;
 
 typedef enum {
     SND_PLAYER_SHOT,
@@ -239,179 +204,20 @@ void draw_text_block(SDL_Renderer *renderer, int x, int y, int scale, const char
     }
 }
 
-void draw_bitmap(SDL_Renderer *renderer, int x, int y, int scale,
-                 const uint8_t *bitmap, int w, int h) {
-    for (int row = 0; row < h; ++row) {
-        for (int col = 0; col < w; ++col) {
-            if (bitmap[row * w + col]) {
-                SDL_Rect px = {x + col * scale, y + row * scale, scale, scale};
-                SDL_RenderFillRect(renderer, &px);
-            }
-        }
-    }
-}
-
-static const uint8_t alien_bitmaps[ALIEN_ROWS][2][ALIEN_BMP_W * ALIEN_BMP_H] = {
-    {
-        { 0,0,1,1,1,1,1,1,0,0,
-          0,1,1,0,0,0,0,1,1,0,
-          1,1,1,1,1,1,1,1,1,1,
-          1,0,1,1,1,1,1,1,0,1,
-          0,0,1,0,0,0,0,1,0,0 },
-        { 0,0,1,1,1,1,1,1,0,0,
-          1,1,1,0,0,0,0,1,1,1,
-          1,1,1,1,1,1,1,1,1,1,
-          0,1,0,1,1,1,1,0,1,0,
-          1,0,0,0,0,0,0,0,0,1 }
-    },
-    {
-        { 0,0,1,1,1,1,1,1,0,0,
-          0,1,0,0,1,1,0,0,1,0,
-          1,1,1,1,1,1,1,1,1,1,
-          0,1,1,0,0,0,0,1,1,0,
-          1,0,0,1,1,1,1,0,0,1 },
-        { 0,0,1,1,1,1,1,1,0,0,
-          1,0,0,0,1,1,0,0,0,1,
-          1,1,1,1,1,1,1,1,1,1,
-          0,1,0,0,0,0,0,0,1,0,
-          1,0,1,1,0,0,1,1,0,1 }
-    },
-    {
-        { 0,0,0,1,1,1,1,0,0,0,
-          0,0,1,1,1,1,1,1,0,0,
-          0,1,1,1,1,1,1,1,1,0,
-          1,1,0,1,1,1,1,0,1,1,
-          0,1,0,0,0,0,0,0,1,0 },
-        { 0,0,0,1,1,1,1,0,0,0,
-          0,1,1,1,1,1,1,1,1,0,
-          1,1,0,1,1,1,1,0,1,1,
-          0,1,1,0,0,0,0,1,1,0,
-          1,0,0,0,0,0,0,0,0,1 }
-    }
-};
-
-static const uint8_t ship_bitmap[SHIP_BMP_W * SHIP_BMP_H] = {
-    0,0,0,0,0,1,1,1,0,0,0,0,
-    0,0,1,1,1,1,1,1,1,1,0,0,
-    0,1,1,1,1,1,1,1,1,1,1,0,
-    1,1,1,1,1,1,1,1,1,1,1,1
-};
 
 /* -------------------- Audio -------------------- */
 
-static double envelope_amp(ActiveSound *s) {
-    double t = s->t;
-    double a = s->env.attack;
-    double d = s->env.decay;
-    double sus = s->env.sustain;
-    double r = s->env.release;
-    double level = s->env.sustain_level;
-    if (t < a) return t / a;
-    if (t < a + d) return 1.0 - (1.0 - level) * (t - a) / d;
-    if (t < a + d + sus) return level;
-    if (t < s->total) return level * (1.0 - (t - (a + d + sus)) / r);
-    s->active = 0;
-    return 0.0;
-}
-
-void audio_callback(void *userdata, Uint8 *stream, int len) {
-    (void)userdata;
-    Sint16 *buffer = (Sint16 *)stream;
-    int length = len / 2;
-    for (int i = 0; i < length; ++i) {
-        double sample = 0.0;
-        for (int s = 0; s < MAX_ACTIVE_SOUNDS; ++s) {
-            if (!sounds[s].active) continue;
-            ActiveSound *as = &sounds[s];
-            double amp = envelope_amp(as);
-            double val = 0.0;
-            switch (as->wave) {
-                case WAVE_SINE:   val = sin(as->phase); break;
-                case WAVE_SQUARE: val = sin(as->phase) > 0 ? 1.0 : -1.0; break;
-                case WAVE_NOISE:  val = ((rand() % 20001) / 10000.0) - 1.0; break;
-            }
-            sample += val * amp;
-            as->phase += 2.0 * M_PI * as->freq / audio.freq;
-            as->t += 1.0 / audio.freq;
-        }
-        if (sample > 1.0) sample = 1.0;
-        if (sample < -1.0) sample = -1.0;
-        buffer[i] = (Sint16)(sample * 3000);
-    }
-}
-
-void play_beep(double freq, int dur_ms, Waveform wave, ADSR env) {
-    SDL_LockAudioDevice(audio.device);
-    env.attack /= 1000.0;
-    env.decay  /= 1000.0;
-    env.release/= 1000.0;
-    if (env.attack < 0) env.attack = 0;
-    if (env.decay < 0) env.decay = 0;
-    if (env.release < 0) env.release = 0;
-    env.sustain = (dur_ms / 1000.0) - (env.attack + env.decay + env.release);
-    if (env.sustain < 0) env.sustain = 0;
-    double total = env.attack + env.decay + env.sustain + env.release;
-    for (int i = 0; i < MAX_ACTIVE_SOUNDS; ++i) {
-        if (!sounds[i].active) {
-            sounds[i].active = 1;
-            sounds[i].freq = freq;
-            sounds[i].phase = 0;
-            sounds[i].t = 0;
-            sounds[i].wave = wave;
-            sounds[i].env = env;
-            sounds[i].total = total;
-            break;
-        }
-    }
-    SDL_UnlockAudioDevice(audio.device);
-    SDL_PauseAudioDevice(audio.device, 0);
-}
-
-void schedule_beep(double freq, int dur_ms, Waveform wave, ADSR env, int delay_ms) {
-    if (pending_count >= MAX_PENDING_SOUNDS) return;
-    pending_sounds[pending_count++] = (PendingSound){freq, dur_ms, wave, env, delay_ms};
-}
-
-void update_sounds(int dt_ms) {
-    for (int i = 0; i < pending_count; ) {
-        pending_sounds[i].delay_ms -= dt_ms;
-        if (pending_sounds[i].delay_ms <= 0) {
-            play_beep(pending_sounds[i].freq, pending_sounds[i].dur_ms,
-                     pending_sounds[i].wave, pending_sounds[i].env);
-            pending_sounds[i] = pending_sounds[--pending_count];
-        } else {
-            ++i;
-        }
-    }
-}
-
-void enqueue_sound(SoundEvent e) {
-    ADSR env;
+static void enqueue_sound(SoundEvent e) {
+    Mix_Chunk *chunk = NULL;
     switch (e) {
-        case SND_PLAYER_SHOT:
-            env = (ADSR){10, 40, 0, 40, 0.6};
-            play_beep(880.0, 120, WAVE_SINE, env);
-            break;
-        case SND_ALIEN_HIT:
-            env = (ADSR){10, 150, 0, 150, 0.5};
-            play_beep(220.0, 300, WAVE_SQUARE, env);
-            env = (ADSR){5, 60, 0, 60, 0.5};
-            play_beep(0.0, 120, WAVE_NOISE, env);
-            break;
-        case SND_ALIEN_SHOT:
-            env = (ADSR){5, 30, 0, 30, 0.6};
-            play_beep(660.0, 80, WAVE_SINE, env);
-            break;
-        case SND_PLAYER_HIT:
-            env = (ADSR){10, 100, 0, 100, 0.6};
-            play_beep(180.0, 250, WAVE_SINE, env);
-            break;
-        case SND_WAVE_CLEAR:
-            env = (ADSR){5, 50, 0, 50, 0.6};
-            schedule_beep(440.0, 120, WAVE_SINE, env, 0);
-            schedule_beep(660.0, 120, WAVE_SINE, env, 150);
-            schedule_beep(880.0, 120, WAVE_SINE, env, 300);
-            break;
+        case SND_PLAYER_SHOT: chunk = snd_player_shot; break;
+        case SND_ALIEN_HIT:   chunk = snd_alien_hit; break;
+        case SND_ALIEN_SHOT:  chunk = snd_alien_shot; break;
+        case SND_WAVE_CLEAR:  chunk = snd_wave_clear; break;
+        case SND_PLAYER_HIT:  chunk = snd_player_hit; break;
+    }
+    if (chunk) {
+        Mix_PlayChannel(-1, chunk, 0);
     }
 }
 
@@ -605,20 +411,35 @@ int main(void) {
     }
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-    SDL_AudioSpec want, have;
-    SDL_zero(want);
-    want.freq = 44100;
-    want.format = AUDIO_S16SYS;
-    want.channels = 1;
-    want.samples = 2048;
-    want.callback = audio_callback;
-
-    audio.device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
-    if (audio.device == 0) {
-        SDL_Log("Failed to open audio: %s", SDL_GetError());
-    } else {
-        audio.freq = have.freq;
+    if (!(IMG_Init(IMG_INIT_JPG) & IMG_INIT_JPG)) {
+        SDL_Log("Failed to initialize SDL_image: %s", IMG_GetError());
     }
+    tex_ship = IMG_LoadTexture(renderer, "icon-SpaceShip.jpeg");
+    if (!tex_ship) {
+        SDL_Log("Failed to load ship texture: %s", IMG_GetError());
+    }
+    tex_aliens[0] = IMG_LoadTexture(renderer, "Icon-alien1.jpeg");
+    tex_aliens[1] = IMG_LoadTexture(renderer, "Icon-Alien2.jpeg");
+    tex_aliens[2] = IMG_LoadTexture(renderer, "Icon-Alien3.jpeg");
+    for (int i = 0; i < ALIEN_ROWS; ++i) {
+        if (!tex_aliens[i]) {
+            SDL_Log("Failed to load alien texture %d: %s", i, IMG_GetError());
+        }
+    }
+
+    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
+        SDL_Log("Failed to open audio: %s", Mix_GetError());
+    }
+    snd_player_shot = Mix_LoadWAV("player_shot.wav");
+    if (!snd_player_shot) SDL_Log("Failed to load player_shot.wav: %s", Mix_GetError());
+    snd_alien_hit = Mix_LoadWAV("alien_hit.wav");
+    if (!snd_alien_hit) SDL_Log("Failed to load alien_hit.wav: %s", Mix_GetError());
+    snd_alien_shot = Mix_LoadWAV("alien_shot.wav");
+    if (!snd_alien_shot) SDL_Log("Failed to load alien_shot.wav: %s", Mix_GetError());
+    snd_wave_clear = Mix_LoadWAV("wave_clear.wav");
+    if (!snd_wave_clear) SDL_Log("Failed to load wave_clear.wav: %s", Mix_GetError());
+    snd_player_hit = Mix_LoadWAV("player_hit.wav");
+    if (!snd_player_hit) SDL_Log("Failed to load player_hit.wav: %s", Mix_GetError());
 
     srand((unsigned int)SDL_GetTicks());
     reset_game();
@@ -651,8 +472,6 @@ int main(void) {
                 }
             }
         }
-
-        update_sounds(dt);
 
         const Uint8 *state = SDL_GetKeyboardState(NULL);
         if (active) {
@@ -744,26 +563,17 @@ int main(void) {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
-        int alien_frame = (SDL_GetTicks() / 500) % 2;
-        int alien_scale = ALIEN_WIDTH / ALIEN_BMP_W;
         for (int i = 0; i < ALIEN_COUNT; ++i) {
             if (alien_alive[i] || alien_flash[i] > 0) {
-                if (alien_flash[i] > 0) {
-                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-                } else {
-                    SDL_SetRenderDrawColor(renderer, COLOR_ALIEN.r, COLOR_ALIEN.g, COLOR_ALIEN.b, 255);
-                }
                 int type = i / ALIEN_COLS;
-                draw_bitmap(renderer, aliens[i].x + shake_x, aliens[i].y + shake_y, alien_scale,
-                            alien_bitmaps[type][alien_frame], ALIEN_BMP_W, ALIEN_BMP_H);
+                SDL_Rect dst = {aliens[i].x + shake_x, aliens[i].y + shake_y, ALIEN_WIDTH, ALIEN_HEIGHT};
+                SDL_RenderCopy(renderer, tex_aliens[type], NULL, &dst);
             }
         }
 
         if (invuln_timer <= 0 || (SDL_GetTicks() / 100) % 2 == 0) {
-            SDL_SetRenderDrawColor(renderer, COLOR_PLAYER.r, COLOR_PLAYER.g, COLOR_PLAYER.b, 255);
-            int ship_scale = SHIP_WIDTH / SHIP_BMP_W;
-            draw_bitmap(renderer, ship.x + shake_x, ship.y + shake_y, ship_scale, ship_bitmap,
-                        SHIP_BMP_W, SHIP_BMP_H);
+            SDL_Rect dst = {ship.x + shake_x, ship.y + shake_y, SHIP_WIDTH, SHIP_HEIGHT};
+            SDL_RenderCopy(renderer, tex_ship, NULL, &dst);
         }
 
         if (muzzle_timer > 0) {
@@ -810,9 +620,18 @@ int main(void) {
         if (frame_time < 16) SDL_Delay(16 - frame_time);
     }
 
-    if (audio.device) SDL_CloseAudioDevice(audio.device);
+    Mix_FreeChunk(snd_player_shot);
+    Mix_FreeChunk(snd_alien_hit);
+    Mix_FreeChunk(snd_alien_shot);
+    Mix_FreeChunk(snd_wave_clear);
+    Mix_FreeChunk(snd_player_hit);
+    Mix_CloseAudio();
+    Mix_Quit();
+    SDL_DestroyTexture(tex_ship);
+    for (int i = 0; i < ALIEN_ROWS; ++i) SDL_DestroyTexture(tex_aliens[i]);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+    IMG_Quit();
     SDL_Quit();
     return 0;
 }
