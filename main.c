@@ -217,23 +217,51 @@ static SDL_Texture *load_texture(SDL_Renderer *renderer, const char *path) {
         return NULL;
     }
     Uint32 *pixels = (Uint32 *)surf->pixels;
-    int count = surf->w * surf->h;
-    Uint32 transparent = SDL_MapRGBA(surf->format, 255, 255, 255, 0);
-    for (int i = 0; i < count; ++i) {
-        Uint8 r, g, b;
-        SDL_GetRGB(pixels[i], surf->format, &r, &g, &b);
-        if (r > 250 && g > 250 && b > 250) {
-            pixels[i] = transparent;
+    int w = surf->w;
+    int h = surf->h;
+    /* Use a fully transparent black pixel so linear filtering won't bleed white */
+    Uint32 transparent = SDL_MapRGBA(surf->format, 0, 0, 0, 0);
+    int minx = w, miny = h, maxx = 0, maxy = 0;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int idx = y * w + x;
+            Uint8 r, g, b;
+            SDL_GetRGB(pixels[idx], surf->format, &r, &g, &b);
+            if (r + g + b > 600) {
+                pixels[idx] = transparent;
+            } else {
+                if (x < minx) minx = x;
+                if (x > maxx) maxx = x;
+                if (y < miny) miny = y;
+                if (y > maxy) maxy = y;
+            }
         }
     }
-    // Clear a 1px border to remove stray lines at the edges
-    for (int y = 0; y < surf->h; ++y) {
-        pixels[y * surf->w] = transparent;
-        pixels[y * surf->w + (surf->w - 1)] = transparent;
+
+    /* Crop away empty space so scaling doesn't sample background */
+    if (maxx >= minx && maxy >= miny) {
+        int cw = maxx - minx + 1;
+        int ch = maxy - miny + 1;
+        SDL_Surface *cropped = SDL_CreateRGBSurfaceWithFormat(0, cw, ch, 32, surf->format->format);
+        if (cropped) {
+            SDL_Rect src = {minx, miny, cw, ch};
+            SDL_BlitSurface(surf, &src, cropped, NULL);
+            SDL_FreeSurface(surf);
+            surf = cropped;
+            pixels = (Uint32 *)surf->pixels;
+            w = surf->w;
+            h = surf->h;
+        }
     }
-    for (int x = 0; x < surf->w; ++x) {
+
+    // Clear a 1px border to remove stray lines at the edges
+    for (int y = 0; y < h; ++y) {
+        pixels[y * w] = transparent;
+        pixels[y * w + (w - 1)] = transparent;
+    }
+    for (int x = 0; x < w; ++x) {
         pixels[x] = transparent;
-        pixels[(surf->h - 1) * surf->w + x] = transparent;
+        pixels[(h - 1) * w + x] = transparent;
     }
     SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
     if (!tex) {
