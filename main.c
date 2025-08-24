@@ -226,6 +226,15 @@ static SDL_Texture *load_texture(SDL_Renderer *renderer, const char *path) {
             pixels[i] = transparent;
         }
     }
+    // Clear a 1px border to remove stray lines at the edges
+    for (int y = 0; y < surf->h; ++y) {
+        pixels[y * surf->w] = transparent;
+        pixels[y * surf->w + (surf->w - 1)] = transparent;
+    }
+    for (int x = 0; x < surf->w; ++x) {
+        pixels[x] = transparent;
+        pixels[(surf->h - 1) * surf->w + x] = transparent;
+    }
     SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
     if (!tex) {
         SDL_Log("Failed to create texture from %s: %s", path, SDL_GetError());
