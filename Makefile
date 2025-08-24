@@ -2,10 +2,10 @@ CC=gcc
 CFLAGS=-O2 -Wall -Wextra -std=c11 $(shell pkg-config --cflags sdl2 SDL2_image SDL2_mixer)
 LDFLAGS=$(shell pkg-config --libs sdl2 SDL2_image SDL2_mixer) -lm
 
-all: main
+all: vaders
 
 main: main.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 clean:
-	rm -f main
+	rm -f vaders
