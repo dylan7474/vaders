@@ -14,9 +14,9 @@
 
 #define WIDTH 800
 #define HEIGHT 600
+#define SHIP_SPEED 5
 #define SHIP_WIDTH 120
 #define SHIP_HEIGHT 40
-#define SHIP_SPEED 5
 
 #define BULLET_WIDTH 4
 #define BULLET_HEIGHT 10
@@ -226,6 +226,15 @@ static SDL_Texture *load_texture(SDL_Renderer *renderer, const char *path) {
             pixels[i] = transparent;
         }
     }
+    // Clear a 1px border to remove stray lines at the edges
+    for (int y = 0; y < surf->h; ++y) {
+        pixels[y * surf->w] = transparent;
+        pixels[y * surf->w + (surf->w - 1)] = transparent;
+    }
+    for (int x = 0; x < surf->w; ++x) {
+        pixels[x] = transparent;
+        pixels[(surf->h - 1) * surf->w + x] = transparent;
+    }
     SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
     if (!tex) {
         SDL_Log("Failed to create texture from %s: %s", path, SDL_GetError());
@@ -412,7 +421,8 @@ void draw_hud(SDL_Renderer *renderer) {
 }
 
 void reset_game(void) {
-    ship = (SDL_Rect){(WIDTH - SHIP_WIDTH) / 2, HEIGHT - SHIP_HEIGHT - 10, SHIP_WIDTH, SHIP_HEIGHT};
+    ship = (SDL_Rect){(WIDTH - SHIP_WIDTH) / 2, HEIGHT - SHIP_HEIGHT - 10,
+                      SHIP_WIDTH, SHIP_HEIGHT};
     score = 0;
     lives = 3;
     wave = 1;
@@ -494,7 +504,7 @@ int main(void) {
                 } else if (key == SDLK_SPACE && active) {
                     if (count_active_player_bullets() < 3 && player_bullet_count < MAX_BULLETS) {
                         player_bullets[player_bullet_count++] =
-                            (SDL_Rect){ship.x + SHIP_WIDTH / 2 - BULLET_WIDTH / 2,
+                            (SDL_Rect){ship.x + ship.w / 2 - BULLET_WIDTH / 2,
                                        ship.y - BULLET_HEIGHT, BULLET_WIDTH, BULLET_HEIGHT};
                         muzzle_timer = 50;
                         enqueue_sound(SND_PLAYER_SHOT);
@@ -513,7 +523,7 @@ int main(void) {
             }
             if (state[SDL_SCANCODE_RIGHT]) {
                 ship.x += SHIP_SPEED;
-                if (ship.x > WIDTH - SHIP_WIDTH) ship.x = WIDTH - SHIP_WIDTH;
+                if (ship.x > WIDTH - ship.w) ship.x = WIDTH - ship.w;
             }
 
             int alive_count = 0;
@@ -604,13 +614,13 @@ int main(void) {
         }
 
         if (invuln_timer <= 0 || (SDL_GetTicks() / 100) % 2 == 0) {
-            SDL_Rect dst = {ship.x + shake_x, ship.y + shake_y, SHIP_WIDTH, SHIP_HEIGHT};
+            SDL_Rect dst = {ship.x + shake_x, ship.y + shake_y, ship.w, ship.h};
             SDL_RenderCopy(renderer, tex_ship, NULL, &dst);
         }
 
         if (muzzle_timer > 0) {
             SDL_SetRenderDrawColor(renderer, COLOR_PLAYER_BULLET.r, COLOR_PLAYER_BULLET.g, COLOR_PLAYER_BULLET.b, 255);
-            int cx = ship.x + SHIP_WIDTH / 2 + shake_x;
+            int cx = ship.x + ship.w / 2 + shake_x;
             int cy = ship.y + shake_y;
             SDL_Rect r1 = {cx - 1, cy - 8, 2, 8};
             SDL_Rect r2 = {cx - 4, cy - 4, 8, 2};
