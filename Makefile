@@ -4,7 +4,7 @@ LDFLAGS=$(shell pkg-config --libs sdl2 SDL2_image SDL2_mixer) -lm
 
 all: vaders
 
-main: main.c
+vaders: main.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 clean:
