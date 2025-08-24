@@ -204,6 +204,38 @@ void draw_text_block(SDL_Renderer *renderer, int x, int y, int scale, const char
     }
 }
 
+static SDL_Texture *load_texture(SDL_Renderer *renderer, const char *path) {
+    SDL_Surface *src = IMG_Load(path);
+    if (!src) {
+        SDL_Log("Failed to load %s: %s", path, IMG_GetError());
+        return NULL;
+    }
+    SDL_Surface *surf = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+    SDL_FreeSurface(src);
+    if (!surf) {
+        SDL_Log("Failed to convert %s: %s", path, SDL_GetError());
+        return NULL;
+    }
+    Uint32 *pixels = (Uint32 *)surf->pixels;
+    int count = surf->w * surf->h;
+    Uint32 transparent = SDL_MapRGBA(surf->format, 255, 255, 255, 0);
+    for (int i = 0; i < count; ++i) {
+        Uint8 r, g, b;
+        SDL_GetRGB(pixels[i], surf->format, &r, &g, &b);
+        if (r > 250 && g > 250 && b > 250) {
+            pixels[i] = transparent;
+        }
+    }
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+    if (!tex) {
+        SDL_Log("Failed to create texture from %s: %s", path, SDL_GetError());
+    } else {
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    }
+    SDL_FreeSurface(surf);
+    return tex;
+}
+
 
 /* -------------------- Audio -------------------- */
 
@@ -411,29 +443,19 @@ int main(void) {
         SDL_Quit();
         return 1;
     }
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
     if (!(IMG_Init(IMG_INIT_JPG) & IMG_INIT_JPG)) {
         SDL_Log("Failed to initialize SDL_image: %s", IMG_GetError());
     }
-    SDL_Surface *ship_surf = IMG_Load("Icon-SpaceShip.jpeg");
-    if (!ship_surf) {
-        SDL_Log("Failed to load ship image: %s", IMG_GetError());
-    } else {
-        SDL_SetColorKey(ship_surf, SDL_TRUE, SDL_MapRGB(ship_surf->format, 255, 255, 255));
-        tex_ship = SDL_CreateTextureFromSurface(renderer, ship_surf);
-        SDL_SetTextureBlendMode(tex_ship, SDL_BLENDMODE_BLEND);
-        SDL_FreeSurface(ship_surf);
-        if (!tex_ship) {
-            SDL_Log("Failed to create ship texture: %s", SDL_GetError());
-        }
-    }
-    tex_aliens[0] = IMG_LoadTexture(renderer, "Icon-Alien1.jpeg");
-    tex_aliens[1] = IMG_LoadTexture(renderer, "Icon-Alien2.jpeg");
-    tex_aliens[2] = IMG_LoadTexture(renderer, "Icon-Alien3.jpeg");
+    tex_ship = load_texture(renderer, "Icon-SpaceShip.jpeg");
+    tex_aliens[0] = load_texture(renderer, "Icon-Alien1.jpeg");
+    tex_aliens[1] = load_texture(renderer, "Icon-Alien2.jpeg");
+    tex_aliens[2] = load_texture(renderer, "Icon-Alien3.jpeg");
     for (int i = 0; i < ALIEN_ROWS; ++i) {
         if (!tex_aliens[i]) {
-            SDL_Log("Failed to load alien texture %d: %s", i, IMG_GetError());
+            SDL_Log("Failed to load alien texture %d", i);
         }
     }
 
