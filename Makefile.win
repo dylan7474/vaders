@@ -1,0 +1,32 @@
+CC = x86_64-w64-mingw32-gcc
+
+# Paths to SDL2 libraries (adjust as needed)
+SDL2_DIR ?= C:/SDL2
+SDL2_IMAGE_DIR ?= C:/SDL2_image
+SDL2_MIXER_DIR ?= C:/SDL2_mixer
+
+CFLAGS = -O2 -Wall -Wextra -std=c11 \
+    -I$(SDL2_DIR)/include \
+    -I$(SDL2_IMAGE_DIR)/include \
+    -I$(SDL2_MIXER_DIR)/include
+
+# Link SDL libraries statically so the executable does not require
+# shipping the SDL2 DLLs alongside the game.
+# Windows system libraries required when statically linking SDL2
+WINLIBS = -lsetupapi -limm32 -lwinmm -lole32 -loleaut32 -lversion -lgdi32 -luser32
+
+LDFLAGS = -static \
+    -L$(SDL2_DIR)/lib \
+    -L$(SDL2_IMAGE_DIR)/lib \
+    -L$(SDL2_MIXER_DIR)/lib \
+    -lmingw32 -lSDL2main -lSDL2 \
+    -lSDL2_image -lSDL2_mixer -lm \
+    $(WINLIBS)
+
+all: vaders.exe
+
+vaders.exe: main.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+clean:
+	del /f vaders.exe
