@@ -107,6 +107,8 @@ static const Glyph font[] = {
     {'C', {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}},
     {'E', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}},
     {'G', {0x0E,0x11,0x10,0x10,0x13,0x11,0x0E}},
+    {'I', {0x1F,0x04,0x04,0x04,0x04,0x04,0x1F}},
+    {'L', {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}},
     {'M', {0x11,0x1B,0x15,0x11,0x11,0x11,0x11}},
     {'O', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}},
     {'P', {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}},
@@ -114,48 +116,18 @@ static const Glyph font[] = {
     {'S', {0x0E,0x11,0x10,0x0E,0x01,0x11,0x0E}},
     {'T', {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}},
     {'V', {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}},
+    {'W', {0x11,0x11,0x11,0x15,0x15,0x15,0x0A}},
+    {'0', {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}},
+    {'1', {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}},
+    {'2', {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}},
+    {'3', {0x0E,0x11,0x01,0x06,0x01,0x11,0x0E}},
+    {'4', {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}},
+    {'5', {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E}},
+    {'6', {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}},
+    {'7', {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}},
+    {'8', {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}},
+    {'9', {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}},
 };
-
-static const int digit_segments[10] = {
-    0x3F, /* 0 */
-    0x06, /* 1 */
-    0x5B, /* 2 */
-    0x4F, /* 3 */
-    0x66, /* 4 */
-    0x6D, /* 5 */
-    0x7D, /* 6 */
-    0x07, /* 7 */
-    0x7F, /* 8 */
-    0x6F  /* 9 */
-};
-
-void draw_digit_7seg(SDL_Renderer *renderer, int x, int y, int scale, int digit) {
-    if (digit < 0 || digit > 9) return;
-    int pattern = digit_segments[digit];
-    SDL_Rect seg[7] = {
-        {x + scale,     y,             2*scale, scale},      /* a */
-        {x + 3*scale,   y + scale,     scale,   2*scale},    /* b */
-        {x + 3*scale,   y + 3*scale,   scale,   2*scale},    /* c */
-        {x + scale,     y + 5*scale,   2*scale, scale},      /* d */
-        {x,             y + 3*scale,   scale,   2*scale},    /* e */
-        {x,             y + scale,     scale,   2*scale},    /* f */
-        {x + scale,     y + 3*scale,   2*scale, scale}       /* g */
-    };
-    for (int i = 0; i < 7; ++i) {
-        if (pattern & (1 << i)) {
-            SDL_RenderFillRect(renderer, &seg[i]);
-        }
-    }
-}
-
-void draw_number(SDL_Renderer *renderer, int x, int y, int scale, int value) {
-    char buf[16];
-    sprintf(buf, "%d", value);
-    for (int i = 0; buf[i]; ++i) {
-        draw_digit_7seg(renderer, x, y, scale, buf[i] - '0');
-        x += 5 * scale;
-    }
-}
 
 static const uint8_t* glyph_for(char c) {
     c = toupper((unsigned char)c);
@@ -202,6 +174,12 @@ void draw_text_block(SDL_Renderer *renderer, int x, int y, int scale, const char
         draw_char_block(renderer, x, y, scale, text[i]);
         x += 6 * scale;
     }
+}
+
+void draw_number_block(SDL_Renderer *renderer, int x, int y, int scale, int value) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", value);
+    draw_text_block(renderer, x, y, scale, buf);
 }
 
 static SDL_Texture *load_texture(SDL_Renderer *renderer, const char *path) {
@@ -431,21 +409,21 @@ int count_active_player_bullets(void) {
 void draw_hud(SDL_Renderer *renderer) {
     SDL_SetRenderDrawColor(renderer, COLOR_HUD.r, COLOR_HUD.g, COLOR_HUD.b, COLOR_HUD.a);
     int scale = 2;
-    int y = 10 + shake_y;
-    int x = 10 + shake_x;
+    int y = 10;
+    int x = 10;
     draw_text_block(renderer, x, y, scale, "SCORE:");
     x += text_width_block("SCORE:", scale) + 2;
-    draw_number(renderer, x, y, scale, score);
+    draw_number_block(renderer, x, y, scale, score);
 
-    x = 250 + shake_x;
+    x = 250;
     draw_text_block(renderer, x, y, scale, "LIVES:");
     x += text_width_block("LIVES:", scale) + 2;
-    draw_number(renderer, x, y, scale, lives);
+    draw_number_block(renderer, x, y, scale, lives);
 
-    x = 450 + shake_x;
+    x = 450;
     draw_text_block(renderer, x, y, scale, "WAVE:");
     x += text_width_block("WAVE:", scale) + 2;
-    draw_number(renderer, x, y, scale, wave);
+    draw_number_block(renderer, x, y, scale, wave);
 }
 
 void reset_game(void) {
