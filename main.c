@@ -14,8 +14,8 @@
 
 #define WIDTH 800
 #define HEIGHT 600
-#define SHIP_WIDTH 60
-#define SHIP_HEIGHT 20
+#define SHIP_WIDTH 120
+#define SHIP_HEIGHT 40
 #define SHIP_SPEED 5
 
 #define BULLET_WIDTH 4
@@ -25,12 +25,12 @@
 
 #define ALIEN_ROWS 3
 #define ALIEN_COLS 8
-#define ALIEN_WIDTH 40
-#define ALIEN_HEIGHT 20
+#define ALIEN_WIDTH 80
+#define ALIEN_HEIGHT 40
 #define ALIEN_H_SPACING 20
 #define ALIEN_V_SPACING 20
 #define ALIEN_SPEED 2
-#define ALIEN_STEP_DOWN 20
+#define ALIEN_STEP_DOWN 40
 #define ALIEN_COUNT (ALIEN_ROWS * ALIEN_COLS)
 
 
@@ -226,11 +226,13 @@ static void enqueue_sound(SoundEvent e) {
 void init_wave(int wave_number) {
     player_bullet_count = 0;
     alien_bullet_count = 0;
+    float start_x = (WIDTH - (ALIEN_COLS * ALIEN_WIDTH + (ALIEN_COLS - 1) * ALIEN_H_SPACING)) / 2.0f;
+    float start_y = 50;
     for (int r = 0; r < ALIEN_ROWS; ++r) {
         for (int c = 0; c < ALIEN_COLS; ++c) {
             int idx = r * ALIEN_COLS + c;
-            float ax = 100 + c * (ALIEN_WIDTH + ALIEN_H_SPACING);
-            float ay = 50 + r * (ALIEN_HEIGHT + ALIEN_V_SPACING);
+            float ax = start_x + c * (ALIEN_WIDTH + ALIEN_H_SPACING);
+            float ay = start_y + r * (ALIEN_HEIGHT + ALIEN_V_SPACING);
             alien_fx[idx] = ax;
             aliens[idx] = (SDL_Rect){(int)ax, (int)ay, ALIEN_WIDTH, ALIEN_HEIGHT};
             alien_alive[idx] = 1;
@@ -414,11 +416,11 @@ int main(void) {
     if (!(IMG_Init(IMG_INIT_JPG) & IMG_INIT_JPG)) {
         SDL_Log("Failed to initialize SDL_image: %s", IMG_GetError());
     }
-    tex_ship = IMG_LoadTexture(renderer, "icon-SpaceShip.jpeg");
+    tex_ship = IMG_LoadTexture(renderer, "Icon-SpaceShip.jpeg");
     if (!tex_ship) {
         SDL_Log("Failed to load ship texture: %s", IMG_GetError());
     }
-    tex_aliens[0] = IMG_LoadTexture(renderer, "Icon-alien1.jpeg");
+    tex_aliens[0] = IMG_LoadTexture(renderer, "Icon-Alien1.jpeg");
     tex_aliens[1] = IMG_LoadTexture(renderer, "Icon-Alien2.jpeg");
     tex_aliens[2] = IMG_LoadTexture(renderer, "Icon-Alien3.jpeg");
     for (int i = 0; i < ALIEN_ROWS; ++i) {
